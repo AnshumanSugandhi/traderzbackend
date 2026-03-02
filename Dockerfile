@@ -21,4 +21,4 @@ EXPOSE 8000
 
 # 6. Run the server using Gunicorn
 # IMPORTANT: Change "myproject" to whatever your main Django folder is named!
-CMD ["gunicorn", "myproject.wsgi:application", "--bind", "0.0.0.0:8000"]
+CMD ["gunicorn", "core.wsgi:application", "--bind", "0.0.0.0:8000"]
