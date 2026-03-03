@@ -159,10 +159,9 @@ def analyze_website(request):
         
         # Enforce strict JSON output from Gemini
         model = genai.GenerativeModel(
-            model_name="gemini-1.5-flash",
+            model_name="gemini-2.5-flash",
             generation_config={"response_mime_type": "application/json"}
         )
-        
         full_prompt = system_prompt + "\n\n--- WEBSITE TEXT ---\n" + combined_text[:20000]
         ai_response = model.generate_content(full_prompt)
         
