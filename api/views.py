@@ -166,8 +166,17 @@ def analyze_website(request):
         ai_response = model.generate_content(full_prompt)
         
         # 3. PARSE AI RESPONSE
-        raw_json = ai_response.text
-        extracted_data = json.loads(raw_json)
+        raw_json = ai_response.text.strip()
+        
+        # Bulletproof: Strip markdown formatting if Gemini included it
+        if raw_json.startswith("```json"):
+            raw_json = raw_json[7:]
+        if raw_json.startswith("```"):
+            raw_json = raw_json[3:]
+        if raw_json.endswith("```"):
+            raw_json = raw_json[:-3]
+            
+        extracted_data = json.loads(raw_json.strip())
         
         # Base dictionary to send to Chrome
         response_data = {
