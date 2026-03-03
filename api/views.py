@@ -150,6 +150,7 @@ def analyze_website(request):
         3. ALTERNATE PHONE: If you cannot find a unique secondary number, YOU MUST enter 'N.A.'.
         4. WORLD KNOWLEDGE OVERRIDE: If the address, email, or phone number is missing from the website text, but you recognize the company (e.g., a known startup or brand), use your internal knowledge base to provide their official public email, phone number, and headquarters city.
         5. JSON FORMAT ONLY: Do not output markdown code blocks (no ```json).
+        6. LOCATION DETERMINATION: Does the address or extracted city belong inside the State of Maharashtra? If Yes, output is_maharashtra: true. If No, output is_maharashtra: false.
         
         EXPECTED KEYS:
         {
@@ -164,7 +165,8 @@ def analyze_website(request):
             "state_name": "Indian State",
             "city_name": "Indian City",
             "pincode_value": "6-digit Indian PIN code",
-            "ai_niche": "A 1-3 word description of what the business does"
+            "ai_niche": "A 1-3 word description of what the business does",
+            "is_maharashtra": boolean indicating if business is in Maharashtra
         }
         """
 
@@ -202,7 +204,8 @@ def analyze_website(request):
             "state_name": extracted_data.get("state_name", ""),
             "city_name": extracted_data.get("city_name", ""),
             "pincode_value": extracted_data.get("pincode_value", ""),
-            "ocr_text": ocr_text
+            "ocr_text": ocr_text,
+            "is_maharashtra": extracted_data.get("is_maharashtra", True)
         }
 
         # --- ALIGN AI WITH CSV PORTAL RULES ---
