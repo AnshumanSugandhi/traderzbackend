@@ -46,50 +46,56 @@ def verify_login(request):
 
 
 # ==========================================
-# STRICT CSV CATEGORY MAPPER
+# REFINED CATEGORY MAPPER (School & SOP Focused)
 # ==========================================
 def match_category_from_csv(text, company_name, ai_niche):
+    # Combine text for scoring, prioritizing the School/Education keywords
     text_lower = (text + " " + company_name + " " + ai_niche).lower()
     
     result = {
         "business_category": "Service Provider",
         "business_sub_category": "",
-        "business_small_category": ai_niche
+        "business_small_category": ai_niche,
+        "category_not_in_list": False  # New flag for the Chrome Extension
     }
     
     csv_path = os.path.join(os.path.dirname(__file__), 'category_master.csv')
     if not os.path.exists(csv_path):
+        result["category_not_in_list"] = True
         return result
         
     max_score = 0
     try:
         with open(csv_path, mode='r', encoding='utf-8-sig', errors='ignore') as f:
             reader = csv.DictReader(f)
-            headers = reader.fieldnames
-            
-            cat_key = next((h for h in headers if 'category' in h.lower() and 'sub' not in h.lower() and 'small' not in h.lower()), 'Category')
-            sub_key = next((h for h in headers if 'sub' in h.lower()), 'Sub Category')
-            small_key = next((h for h in headers if 'small' in h.lower()), 'Small Category')
-
             for row in reader:
-                cat = row.get(cat_key, '').strip()
-                sub_cat = row.get(sub_key, '').strip()
-                small_cat = row.get(small_key, '').strip()
-                
-                if not small_cat and not sub_cat: continue
+                # Based on your Category.xlsx: Category, Sub Category, Small Category
+                cat = row.get('Category', '').strip()
+                sub_cat = row.get('Sub Category', '').strip()
+                small_cat = row.get('Small Category', '').strip()
                 
                 score = 0
-                if small_cat and small_cat.lower() in text_lower: score += 15
-                if sub_cat and sub_cat.lower() in text_lower: score += 5
-                if ai_niche.lower() in small_cat.lower(): score += 10
+                # High priority for Small Category matches (e.g., "High School")
+                if small_cat and small_cat.lower() in text_lower: score += 20
+                # Medium priority for Sub Category matches
+                if sub_cat and sub_cat.lower() in text_lower: score += 10
+                # Contextual match from AI niche
+                if ai_niche.lower() in small_cat.lower(): score += 15
                             
-                if score > max_score and score > 0:
+                if score > max_score:
                     max_score = score
-                    result["business_category"] = cat if cat else "Service Provider"
+                    result["business_category"] = cat
                     result["business_sub_category"] = sub_cat
                     result["business_small_category"] = small_cat
+
+        # SOP RULE: If the match is weak (score < 15), mark as "Not In List"
+        if max_score < 15:
+            result["category_not_in_list"] = True
+            result["business_category"] = "Service Provider" # Fallback
+            
     except Exception as e:
         print(f"[CSV ERROR] {str(e)}")
+        result["category_not_in_list"] = True
         
     return result
 
@@ -152,7 +158,7 @@ def analyze_website(request):
             "company_name": "Exact name of the company or school",
             "owner_name": "Name of the founder/director/principal. If none, use 'N.A.'",
             "primary_phone": "10-digit or 11-digit phone number digits only. If none, use ''",
-            "alternate_phone": "Secondary phone digits only. If none, use ''",
+            "alternate_phone": "Secondary phone digits only. If none, use 'N.A.'",
             "email_1": "Primary email. If none, use ''",
             "email_2": "Secondary email. If none, use ''",
             "full_address": "The physical address of the business",
@@ -192,9 +198,9 @@ def analyze_website(request):
             "company_name": extracted_data.get("company_name", "N.A.")[:150],
             "owner_name": extracted_data.get("owner_name", "N.A."), 
             "primary_phone": extracted_data.get("primary_phone", ""),
-            "alternate_phone": extracted_data.get("alternate_phone", ""), 
+            "alternate_phone": extracted_data.get("alternate_phone") or "N.A.", 
             "email_1": extracted_data.get("email_1", ""),
-            "email_2": extracted_data.get("email_2", ""),  
+            "email_2": extracted_data.get("email_2") or "N.A.",
             "full_address": extracted_data.get("full_address", ""),
             "locality": extracted_data.get("locality", ""),
             "state_name": extracted_data.get("state_name", ""),
