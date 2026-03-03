@@ -17,8 +17,11 @@ Including another URLconf
 from django.contrib import admin
 from django.urls import path
 from api.views import analyze_website
+from . import views
 
 urlpatterns = [
     path('admin/', admin.site.urls),
-    path('api/analyze/', analyze_website)
+    path('api/analyze/', analyze_website),
+    path('api/analyze/', views.analyze_website, name='analyze_website'),
+    path('api/login/', views.verify_login, name='verify_login'), # NEW ROUTE!
 ]
