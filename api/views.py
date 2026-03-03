@@ -4,6 +4,7 @@ import csv
 import json
 import requests
 import gc
+import random
 from io import BytesIO
 import pytesseract
 from PIL import Image
@@ -15,14 +16,21 @@ import google.generativeai as genai
 load_dotenv()
 
 # ==========================================
-# 1. OS & API SETUP
+# 1. OS & TESSERACT SETUP
 # ==========================================
 if sys.platform == 'win32':
     pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
+# Dynamically load all available Gemini API Keys (up to 5 or more)
+AVAILABLE_KEYS = []
+for i in range(1, 10):
+    key = os.getenv(f"GEMINI_API_KEY_{i}")
+    if key:
+        AVAILABLE_KEYS.append(key)
+
+# Fallback in case you only defined "GEMINI_API_KEY"
+if not AVAILABLE_KEYS and os.getenv("GEMINI_API_KEY"):
+    AVAILABLE_KEYS.append(os.getenv("GEMINI_API_KEY"))
 
 # ==========================================
 # 2. EMPLOYEE SECURE LOGIN ENDPOINT
@@ -83,7 +91,6 @@ def match_category_from_csv(text, company_name, ai_niche):
                     result["business_sub_category"] = sub_cat
                     result["business_small_category"] = small_cat
                     
-        # SOP RULE: If the match is weak, mark as "Not In List"
         if max_score < 15:
             result["category_not_in_list"] = True
             result["business_category"] = "Service Provider"
@@ -139,7 +146,18 @@ def analyze_website(request):
         
         combined_text = raw_title + "\n" + raw_text + "\n" + str(social_links) + "\n" + ocr_text
 
-        # --- THE AI BRAIN (Gemini 2.5 Flash) ---
+        # --- MULTI-KEY AI ROULETTE (Rate Limit Bypass) ---
+        if not AVAILABLE_KEYS:
+            return Response({"error": "No Gemini API keys configured on server!"}, status=500)
+            
+        # Randomly select one of your 5 keys for this specific request
+        selected_key = random.choice(AVAILABLE_KEYS)
+        genai.configure(api_key=selected_key)
+        
+        # Determine which key was used (just for logs, hiding the secret part)
+        safe_key_name = selected_key[:10] + "..."
+        print(f"[AI] Using API Key: {safe_key_name}")
+
         system_prompt = """
         You are an expert data extraction AI for lead generation. 
         Read the provided website text and extract the business details into a JSON object.
@@ -170,8 +188,6 @@ def analyze_website(request):
         }
         """
 
-        print("[AI] Sending payload to Gemini 2.5 Flash...")
-        
         model = genai.GenerativeModel(
             model_name="gemini-2.5-flash",
             generation_config={"response_mime_type": "application/json"}
