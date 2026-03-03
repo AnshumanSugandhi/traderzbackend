@@ -8,21 +8,44 @@ import pytesseract
 from PIL import Image, ImageOps
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
-from openai import OpenAI
 from dotenv import load_dotenv
-# 1. CRITICAL OS FIX: Automatically use Windows path locally, but default on Cloud!
+import google.generativeai as genai
+
+load_dotenv()
+
+# 1. OS FIX
 if sys.platform == 'win32':
     pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
-# Load the hidden .env file
-load_dotenv()
-# 2. DEEPSEEK API SETUP (Secure!)
-DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
-ai_client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url="https://api.deepseek.com")
+# 2. GEMINI API SETUP
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
+
+# ==========================================
+# EMPLOYEE SECURE LOGIN ENDPOINT
+# ==========================================
+EMPLOYEE_CREDENTIALS = {
+    "EMP001": "pass123",
+    "EMP002": "bot456",
+    "admin": "12345"
+}
+
+@api_view(['POST'])
+def verify_login(request):
+    emp_id = request.data.get('emp_id', '').strip()
+    emp_pass = request.data.get('emp_pass', '').strip()
+    
+    if emp_id in EMPLOYEE_CREDENTIALS and EMPLOYEE_CREDENTIALS[emp_id] == emp_pass:
+        print(f"[AUTH] Access Granted to {emp_id}")
+        return Response({"status": "success", "token": f"verified_token_{emp_id}"})
+    else:
+        print(f"[AUTH] Failed login attempt for ID: {emp_id}")
+        return Response({"status": "error", "message": "Invalid ID or Password"}, status=401)
+
 
 # ==========================================
 # STRICT CSV CATEGORY MAPPER
-# Ensures the AI's guesses perfectly match your dropdowns
 # ==========================================
 def match_category_from_csv(text, company_name, ai_niche):
     text_lower = (text + " " + company_name + " " + ai_niche).lower()
@@ -104,15 +127,14 @@ def analyze_website(request):
                 extracted_str = text_normal + "\n" + text_inverted
                 if len(extracted_str.strip()) > 5:
                     ocr_text += f"\n {extracted_str} \n"
-                    print(f"[VISION] Successfully read text from image: {img_url}")
+                    print(f"[VISION] Successfully read text from image")
             except Exception as e:
-                print(f"[VISION ERROR] Could not read {img_url}: {str(e)}")
+                print(f"[VISION ERROR] Could not read image: {str(e)}")
                 continue
         
         combined_text = raw_title + "\n" + raw_text + "\n" + ocr_text
 
-        # 2. THE AI BRAIN (DeepSeek JSON Extraction)
-        # We tell the AI exactly what JSON shape Chrome needs
+        # 2. THE AI BRAIN (Gemini 1.5 Flash)
         system_prompt = """
         You are an expert data extraction AI. 
         Read the provided website text and extract the business details.
@@ -131,24 +153,21 @@ def analyze_website(request):
             "pincode_value": "6-digit Indian PIN code",
             "ai_niche": "A 1-3 word description of what the business does (e.g. 'Software', 'High School', 'Plumbing')"
         }
-        Do NOT include markdown formatting or extra text. Output JSON only.
         """
 
-        print("[AI] Sending payload to DeepSeek...")
+        print("[AI] Sending payload to Gemini...")
         
-        # Call DeepSeek API
-        ai_response = ai_client.chat.completions.create(
-            model="deepseek-chat",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": combined_text[:15000]} # Limit text to save tokens
-            ],
-            response_format={"type": "json_object"},
-            temperature=0.1 # Low temperature for strict factual accuracy
+        # Enforce strict JSON output from Gemini
+        model = genai.GenerativeModel(
+            model_name="gemini-1.5-flash",
+            generation_config={"response_mime_type": "application/json"}
         )
         
+        full_prompt = system_prompt + "\n\n--- WEBSITE TEXT ---\n" + combined_text[:20000]
+        ai_response = model.generate_content(full_prompt)
+        
         # 3. PARSE AI RESPONSE
-        raw_json = ai_response.choices[0].message.content
+        raw_json = ai_response.text
         extracted_data = json.loads(raw_json)
         
         # Base dictionary to send to Chrome
@@ -171,7 +190,6 @@ def analyze_website(request):
         }
 
         # 4. ALIGN AI WITH CSV PORTAL RULES
-        # We pass the AI's "Niche" guess into the strict CSV matcher
         ai_niche_guess = extracted_data.get("ai_niche", "")
         cat_data = match_category_from_csv(combined_text, response_data["company_name"], ai_niche_guess)
         response_data.update(cat_data)
@@ -183,32 +201,3 @@ def analyze_website(request):
     except Exception as e:
         print(f"[CRITICAL BACKEND ERROR] {str(e)}")
         return Response({"error": str(e)}, status=500)
-# ==========================================
-# EMPLOYEE SECURE LOGIN ENDPOINT
-# ==========================================
-
-# Your secure employee database (You can easily change this to a real Database model later!)
-EMPLOYEE_CREDENTIALS = {
-    "EMP001": "pass123",
-    "EMP002": "bot456",
-    "admin": "12345"
-}
-
-@api_view(['POST'])
-def verify_login(request):
-    emp_id = request.data.get('emp_id', '').strip()
-    emp_pass = request.data.get('emp_pass', '').strip()
-    
-    # Check if the employee ID exists and password matches
-    if emp_id in EMPLOYEE_CREDENTIALS and EMPLOYEE_CREDENTIALS[emp_id] == emp_pass:
-        print(f"[AUTH] Access Granted to {emp_id}")
-        return Response({
-            "status": "success", 
-            "token": f"verified_token_{emp_id}"
-        })
-    else:
-        print(f"[AUTH] Failed login attempt for ID: {emp_id}")
-        return Response({
-            "status": "error", 
-            "message": "Invalid ID or Password"
-        }, status=401)

@@ -5,5 +5,5 @@ pytesseract
 Pillow
 requests
 gunicorn
-openai
+google-generativeai
 python-dotenv
