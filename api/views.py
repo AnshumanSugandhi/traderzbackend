@@ -1,5 +1,6 @@
 import sys
 import os
+import gc
 import csv
 import json
 import requests
@@ -104,30 +105,38 @@ def analyze_website(request):
         target_url = data.get('url', '')
         image_urls = data.get('images', []) 
         
-        # 1. VISION ENGINE (Free Local OCR)
+        # 1. VISION ENGINE (Memory Optimized for Render Free Tier)
         ocr_text = ""
-        for img_url in image_urls:
+        
+        # STRICT LIMIT: Only process the first image to prevent OOM crashes
+        for img_url in image_urls[:1]: 
             try:
                 response = requests.get(img_url, timeout=5)
                 img = Image.open(BytesIO(response.content))
                 
-                if img.width > 1200:
-                    ratio = 1200 / img.width
-                    img = img.resize((1200, int(img.height * ratio)), Image.Resampling.LANCZOS)
-                elif img.width < 600:
+                # RAM SAVER: Resize to max 800px instead of 1200px
+                if img.width > 800:
+                    ratio = 800 / img.width
+                    img = img.resize((800, int(img.height * ratio)), Image.Resampling.LANCZOS)
+                elif img.width < 400:
                     img = img.resize((img.width * 2, img.height * 2), Image.Resampling.LANCZOS)
                 
                 img_gray = img.convert('L') 
                 custom_config = r'--oem 3 --psm 11'
                 
+                # RAM SAVER: Only read normal text, drop the inverted read
                 text_normal = pytesseract.image_to_string(img_gray, config=custom_config)
-                img_inverted = ImageOps.invert(img_gray)
-                text_inverted = pytesseract.image_to_string(img_inverted, config=custom_config)
                 
-                extracted_str = text_normal + "\n" + text_inverted
-                if len(extracted_str.strip()) > 5:
-                    ocr_text += f"\n {extracted_str} \n"
+                if len(text_normal.strip()) > 5:
+                    ocr_text += f"\n {text_normal} \n"
                     print(f"[VISION] Successfully read text from image")
+                    
+                # RAM SAVER: Explicitly delete the heavy image files from memory
+                img.close()
+                img_gray.close()
+                del response, img, img_gray, text_normal
+                gc.collect() # Force the server to empty the trash
+                
             except Exception as e:
                 print(f"[VISION ERROR] Could not read image: {str(e)}")
                 continue
