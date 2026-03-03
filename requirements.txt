@@ -6,3 +6,4 @@ Pillow
 requests
 gunicorn
 openai
+python-dotenv

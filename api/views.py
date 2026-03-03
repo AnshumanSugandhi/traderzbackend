@@ -9,14 +9,15 @@ from PIL import Image, ImageOps
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from openai import OpenAI
-
+from dotenv import load_dotenv
 # 1. CRITICAL OS FIX: Automatically use Windows path locally, but default on Cloud!
 if sys.platform == 'win32':
     pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
-# 2. DEEPSEEK API SETUP
-# Replace with your actual DeepSeek API Key!
-DEEPSEEK_API_KEY = "sk-0dc44d417de64316b999638bad78b13a"
+# Load the hidden .env file
+load_dotenv()
+# 2. DEEPSEEK API SETUP (Secure!)
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 ai_client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url="https://api.deepseek.com")
 
 # ==========================================
