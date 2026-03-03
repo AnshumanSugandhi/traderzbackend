@@ -66,6 +66,7 @@ def match_category_from_csv(text, company_name, ai_niche):
         "category_not_in_list": False
     }
     
+    # Assuming category_master is in the same folder as views.py
     csv_path = os.path.join(os.path.dirname(__file__), 'category_master.csv')
     if not os.path.exists(csv_path):
         result["category_not_in_list"] = True
@@ -100,6 +101,40 @@ def match_category_from_csv(text, company_name, ai_niche):
         result["category_not_in_list"] = True
         
     return result
+
+# ==========================================
+# 3.5 STRICT DMS PINCODE MAPPER
+# ==========================================
+def lookup_pincode_from_dms(city_name):
+    if not city_name or city_name == "N.A.": 
+        return ""
+        
+    # Get the parent directory (where manage.py is located)
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    csv_path = os.path.join(base_dir, 'dms_master.csv')
+    
+    # Fallback to current directory just in case
+    if not os.path.exists(csv_path):
+        csv_path = os.path.join(os.path.dirname(__file__), 'dms_master.csv')
+        
+    if not os.path.exists(csv_path): 
+        print(f"[DMS] dms_master.csv not found at {csv_path}!")
+        return ""
+        
+    try:
+        with open(csv_path, mode='r', encoding='utf-8-sig', errors='ignore') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                # Check possible column names
+                city_col = row.get('City', row.get('District', row.get('city_name', ''))).strip()
+                pin_col = row.get('Pincode', row.get('Pin', row.get('pincode', ''))).strip()
+                
+                if city_col and city_name.lower() in city_col.lower() and pin_col:
+                    return pin_col[:6] # Return the 6 digit pin
+    except Exception as e:
+        print(f"[DMS ERROR] {str(e)}")
+        
+    return ""
 
 # ==========================================
 # 4. MAIN API ENDPOINT
@@ -150,41 +185,41 @@ def analyze_website(request):
         if not AVAILABLE_KEYS:
             return Response({"error": "No Gemini API keys configured on server!"}, status=500)
             
-        # Randomly select one of your 5 keys for this specific request
         selected_key = random.choice(AVAILABLE_KEYS)
         genai.configure(api_key=selected_key)
-        
-        # Determine which key was used (just for logs, hiding the secret part)
         safe_key_name = selected_key[:10] + "..."
         print(f"[AI] Using API Key: {safe_key_name}")
 
+        # --- THE AI BRAIN ---
         system_prompt = """
         You are an expert data extraction AI for lead generation. 
         Read the provided website text and extract the business details into a JSON object.
         
         STRICT RULES:
-        1. OWNER NAME: Look for 'Director', 'Founder', 'Principal', or 'Proprietor'. If you see a 'Contact Person' name near a phone number, use that.
-        2. ADDRESS: Indian addresses often end with a 6-digit PIN. If you find a PIN code, the text immediately before it is the Address.
-        3. ALTERNATE PHONE: If you cannot find a unique secondary number, YOU MUST enter 'N.A.'.
-        4. WORLD KNOWLEDGE OVERRIDE: If the address, email, or phone number is missing from the website text, but you recognize the company (e.g., a known startup or brand), use your internal knowledge base to provide their official public email, phone number, and headquarters city.
-        5. JSON FORMAT ONLY: Do not output markdown code blocks (no ```json).
-        6. LOCATION DETERMINATION: Does the address or extracted city belong inside the State of Maharashtra? If Yes, output is_maharashtra: true. If No, output is_maharashtra: false.
+        1. COMPANY NAME: Extract the core brand name only. YOU MUST STRIP OUT phrases like "by [Name]" or "Powered by". (e.g., "Desi Utpad by Jaya" MUST become "Desi Utpad").
+        2. LOCALITY: Extract the neighborhood, street, or local area. If none is found, output the City name as the locality.
+        3. PINCODE: Extract the 6-digit PIN. If it is missing from the website, use your world knowledge to provide the correct standard PIN for that city in the 'ai_guessed_pincode' key.
+        4. OWNER NAME: Look for 'Director', 'Founder', or 'Proprietor'.
+        5. ALTERNATE PHONE: If you cannot find a unique secondary number, YOU MUST enter 'N.A.'.
+        6. JSON FORMAT ONLY. No markdown tags.
+        7. LOCATION DETERMINATION: Does the address or extracted city belong inside the State of Maharashtra? If Yes, output is_maharashtra: true. If No, output is_maharashtra: false.
         
         EXPECTED KEYS:
         {
-            "company_name": "Exact name of the company or school",
-            "owner_name": "Name of the founder/director/principal. If none, use 'N.A.'",
-            "primary_phone": "10-digit or 11-digit phone number digits only. If none, use ''",
-            "alternate_phone": "Secondary phone digits only. If none, use 'N.A.'",
-            "email_1": "Primary email. If none, use ''",
-            "email_2": "Secondary email. If none, use 'N.A.'",
-            "full_address": "The physical address of the business",
-            "locality": "The local neighborhood, building, or area name",
+            "company_name": "Core brand name",
+            "owner_name": "Founder name or N.A.",
+            "primary_phone": "10-digit number or empty",
+            "alternate_phone": "Secondary number or N.A.",
+            "email_1": "Primary email",
+            "email_2": "Secondary email or N.A.",
+            "full_address": "The physical address",
+            "locality": "Neighborhood or City Name",
             "state_name": "Indian State",
             "city_name": "Indian City",
-            "pincode_value": "6-digit Indian PIN code",
-            "ai_niche": "A 1-3 word description of what the business does",
-            "is_maharashtra": boolean indicating if business is in Maharashtra
+            "pincode_value": "6-digit PIN from text",
+            "ai_guessed_pincode": "6-digit PIN from your world knowledge",
+            "ai_niche": "A 1-3 word description",
+            "is_maharashtra": boolean
         }
         """
 
@@ -196,7 +231,7 @@ def analyze_website(request):
         full_prompt = system_prompt + "\n\n--- WEBSITE TEXT ---\n" + combined_text[:25000]
         ai_response = model.generate_content(full_prompt)
         
-        # --- PARSE AI RESPONSE (Markdown Bulletproof) ---
+        # --- PARSE AI RESPONSE ---
         raw_json = ai_response.text.strip()
         if raw_json.startswith("```json"):
             raw_json = raw_json[7:]
@@ -207,19 +242,49 @@ def analyze_website(request):
             
         extracted_data = json.loads(raw_json.strip())
         
+        # --- DATA CLEANUP & BUG FIXES ---
+        city_name = extracted_data.get("city_name", "")
+        locality = extracted_data.get("locality", "")
+        pincode_value = extracted_data.get("pincode_value", "")
+        full_addr = extracted_data.get("full_address", "")
+        company_name = extracted_data.get("company_name", "N.A.")
+        
+        # FIX 1: Hard-strip "by [Name]" from Company Name
+        lower_comp = company_name.lower()
+        if " by " in lower_comp:
+            idx = lower_comp.rfind(" by ")
+            company_name = company_name[:idx].strip()
+
+        # FIX 2: DMS Pincode Lookup Fallback
+        if not pincode_value and city_name:
+            pincode_value = lookup_pincode_from_dms(city_name)
+            if not pincode_value:
+                pincode_value = extracted_data.get("ai_guessed_pincode", "")
+
+        # FIX 3: Append Pincode to Address if missing
+        if pincode_value and str(pincode_value) not in full_addr:
+            if full_addr and full_addr != "N.A.":
+                full_addr = f"{full_addr}, {city_name} - {pincode_value}".strip(", ")
+            elif city_name:
+                full_addr = f"{city_name} - {pincode_value}".strip(", ")
+
+        # FIX 4: Locality Fallback to City
+        if not locality or locality == "N.A.":
+            locality = city_name
+            
         # --- PREPARE FINAL PAYLOAD ---
         response_data = {
-            "company_name": extracted_data.get("company_name", "N.A.")[:150],
+            "company_name": company_name[:150],
             "owner_name": extracted_data.get("owner_name", "N.A."), 
             "primary_phone": extracted_data.get("primary_phone", ""),
             "alternate_phone": extracted_data.get("alternate_phone") or "N.A.", 
             "email_1": extracted_data.get("email_1", ""),
             "email_2": extracted_data.get("email_2") or "N.A.",  
-            "full_address": extracted_data.get("full_address", ""),
-            "locality": extracted_data.get("locality", ""),
+            "full_address": full_addr,
+            "locality": locality,
             "state_name": extracted_data.get("state_name", ""),
-            "city_name": extracted_data.get("city_name", ""),
-            "pincode_value": extracted_data.get("pincode_value", ""),
+            "city_name": city_name,
+            "pincode_value": pincode_value,
             "ocr_text": ocr_text,
             "is_maharashtra": extracted_data.get("is_maharashtra", True)
         }
