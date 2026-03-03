@@ -68,7 +68,6 @@ def match_category_from_csv(text, company_name, ai_niche):
         with open(csv_path, mode='r', encoding='utf-8-sig', errors='ignore') as f:
             reader = csv.DictReader(f)
             for row in reader:
-                # Ensure headers match your Category.xlsx columns
                 cat = row.get('Category', '').strip()
                 sub_cat = row.get('Sub Category', '').strip()
                 small_cat = row.get('Small Category', '').strip()
@@ -110,13 +109,11 @@ def analyze_website(request):
         
         # --- VISION ENGINE (RAM Optimized for Render) ---
         ocr_text = ""
-        # STRICT LIMIT: Only process the first image to prevent Out-Of-Memory crashes
         for img_url in image_urls[:1]: 
             try:
                 response = requests.get(img_url, timeout=5)
                 img = Image.open(BytesIO(response.content))
                 
-                # RAM SAVER: Resize to max 800px
                 if img.width > 800:
                     ratio = 800 / img.width
                     img = img.resize((800, int(img.height * ratio)), Image.Resampling.LANCZOS)
@@ -131,7 +128,6 @@ def analyze_website(request):
                     ocr_text += f"\n {text_normal} \n"
                     print(f"[VISION] Successfully read text from image")
                     
-                # RAM SAVER: Explicitly delete heavy files from memory
                 img.close()
                 img_gray.close()
                 del response, img, img_gray, text_normal
@@ -152,7 +148,8 @@ def analyze_website(request):
         1. OWNER NAME: Look for 'Director', 'Founder', 'Principal', or 'Proprietor'. If you see a 'Contact Person' name near a phone number, use that.
         2. ADDRESS: Indian addresses often end with a 6-digit PIN. If you find a PIN code, the text immediately before it is the Address.
         3. ALTERNATE PHONE: If you cannot find a unique secondary number, YOU MUST enter 'N.A.'.
-        4. JSON FORMAT ONLY: Do not output markdown code blocks (no ```json).
+        4. WORLD KNOWLEDGE OVERRIDE: If the address, email, or phone number is missing from the website text, but you recognize the company (e.g., a known startup or brand), use your internal knowledge base to provide their official public email, phone number, and headquarters city.
+        5. JSON FORMAT ONLY: Do not output markdown code blocks (no ```json).
         
         EXPECTED KEYS:
         {
@@ -167,7 +164,7 @@ def analyze_website(request):
             "state_name": "Indian State",
             "city_name": "Indian City",
             "pincode_value": "6-digit Indian PIN code",
-            "ai_niche": "A 1-3 word description of what the business does (e.g. 'Software', 'High School')"
+            "ai_niche": "A 1-3 word description of what the business does"
         }
         """
 
