@@ -44,11 +44,11 @@ def verify_login(request):
     return Response({"status": "error", "message": "Invalid ID or Password"}, status=401)
 
 # ==========================================
-# 3. CSV MAPPERS (CATEGORY & LOCATION)
+# 3. CSV MAPPERS
 # ==========================================
 def match_category_from_csv(text, company_name, ai_niche):
-    text_lower = (text + " " + company_name + " " + ai_niche).lower()
-    result = {"business_category": "Service Provider", "business_sub_category": "", "business_small_category": ai_niche, "category_not_in_list": False}
+    text_lower = (str(text) + " " + str(company_name) + " " + str(ai_niche)).lower()
+    result = {"business_category": "Service Provider", "business_sub_category": "", "business_small_category": str(ai_niche or ''), "category_not_in_list": False}
     
     csv_path = os.path.join(os.path.dirname(__file__), 'category_master.csv')
     if not os.path.exists(csv_path):
@@ -67,7 +67,7 @@ def match_category_from_csv(text, company_name, ai_niche):
                 score = 0
                 if small_cat and small_cat.lower() in text_lower: score += 20
                 if sub_cat and sub_cat.lower() in text_lower: score += 10
-                if ai_niche.lower() in small_cat.lower(): score += 15
+                if ai_niche and str(ai_niche).lower() in small_cat.lower(): score += 15
                             
                 if score > max_score and score > 0:
                     max_score = score
@@ -81,21 +81,19 @@ def match_category_from_csv(text, company_name, ai_niche):
 
 def normalize_location_from_dms(pincode_raw, city_raw):
     """
-    Cross-references AI results with dms_master.csv to ensure verified 
-    dropdown values are used for State, City, and Pincode.
+    STRICT DMS HIERARCHY: Searches Pincode first. If not found, searches City.
+    Returns the exact spelling of State, City, and Pincode from your CSV.
     """
-    pincode_clean = re.sub(r'\D', '', str(pincode_raw))[:6]
-    city_clean = str(city_raw).strip().lower()
-    if city_clean == "n.a.": city_clean = ""
+    pincode_clean = re.sub(r'\D', '', str(pincode_raw or ''))[:6]
+    
+    city_clean = str(city_raw or '').strip().lower()
+    if city_clean in ["n.a.", "none", "null"]: city_clean = ""
 
-    # Look for dms_master.csv in project root (manage.py directory)
+    # Path resolution for manage.py root vs views.py directory
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     csv_path = os.path.join(base_dir, 'dms_master.csv')
-    
-    # Fallback to current folder
     if not os.path.exists(csv_path):
         csv_path = os.path.join(os.path.dirname(__file__), 'dms_master.csv')
-    
     if not os.path.exists(csv_path):
         print(f"[DMS ERROR] File not found at {csv_path}")
         return None
@@ -104,10 +102,9 @@ def normalize_location_from_dms(pincode_raw, city_raw):
         with open(csv_path, mode='r', encoding='utf-8-sig', errors='ignore') as f:
             reader = list(csv.DictReader(f)) 
             
-            # 1. Primary Search: Match by Pincode (Highest accuracy for portal dropdowns)
+            # 1. Pincode Match (Most Accurate)
             if len(pincode_clean) == 6:
                 for row in reader:
-                    # Check common headers for pincode
                     p_val = (row.get('Pincode') or row.get('Pin') or row.get('pincode') or '').strip()
                     if p_val == pincode_clean:
                         return {
@@ -116,7 +113,7 @@ def normalize_location_from_dms(pincode_raw, city_raw):
                             "pincode": p_val
                         }
             
-            # 2. Secondary Search: Match by City
+            # 2. City Match (Fallback)
             if city_clean:
                 for row in reader:
                     c_val = (row.get('City') or row.get('District') or row.get('city_name') or '').strip()
@@ -177,27 +174,33 @@ def analyze_website(request):
         EXPECTED KEYS: { "company_name": "", "owner_name": "", "primary_phone": "", "alternate_phone": "", "email_1": "", "email_2": "", "full_address": "", "locality": "", "state_name": "", "city_name": "", "pincode_value": "", "ai_niche": "", "is_maharashtra": true }
         """
 
+        # Using gemini-2.5-flash for ultimate stability and speed without 404s
         model = genai.GenerativeModel(model_name="gemini-2.5-flash", generation_config={"response_mime_type": "application/json"})
         ai_response = model.generate_content(system_prompt + "\n\n--- TEXT ---\n" + combined_text[:25000])
         
         try:
             res_text = ai_response.text.strip()
-            # Clean possible markdown wrap
             if res_text.startswith("```"):
                 res_text = re.sub(r'^```[a-z]*\n|```$', '', res_text, flags=re.MULTILINE)
             extracted_data = json.loads(res_text)
-        except:
+        except Exception as json_err:
+            print(f"[JSON ERROR] Failed to parse AI output: {str(json_err)}")
             return Response({"error": "AI generated invalid JSON"}, status=500)
 
-        # --- BUG FIX 1: Clean Company Name ---
-        company_name = extracted_data.get("company_name", "N.A.")
+        # --- 1. Clean Company Name ---
+        company_name = str(extracted_data.get("company_name") or "N.A.").strip()
         if " by " in company_name.lower():
             company_name = company_name[:company_name.lower().rfind(" by ")].strip()
 
-        # --- BUG FIX 2 & 3: Normalize Location via DMS Master ---
-        raw_pin = extracted_data.get("pincode_value", "")
-        raw_city = extracted_data.get("city_name", "")
-        raw_state = extracted_data.get("state_name", "")
+        # --- 2. Normalize Location via DMS Master ---
+        raw_pin = str(extracted_data.get("pincode_value") or "").strip()
+        raw_city = str(extracted_data.get("city_name") or "").strip()
+        raw_state = str(extracted_data.get("state_name") or "").strip()
+        
+        # Prevent "None" literal string bug
+        if raw_city.lower() in ["n.a.", "none", "null"]: raw_city = ""
+        if raw_state.lower() in ["n.a.", "none", "null"]: raw_state = ""
+        if raw_pin.lower() in ["n.a.", "none", "null"]: raw_pin = ""
         
         verified_loc = normalize_location_from_dms(raw_pin, raw_city)
         
@@ -208,30 +211,44 @@ def analyze_website(request):
         else:
             state_name = raw_state
             city_name = raw_city
-            pincode_value = re.sub(r'\D', '', str(raw_pin))[:6]
+            pincode_value = re.sub(r'\D', '', raw_pin)[:6]
 
-        # Sync Maharashtra flag with verified state
-        is_maharashtra = extracted_data.get("is_maharashtra", True)
+        # --- 3. Format Address & Locality with Pincode ---
+        full_address = str(extracted_data.get("full_address") or "").strip()
+        if full_address.lower() in ["n.a.", "none", "null"]: full_address = ""
+        
+        locality = str(extracted_data.get("locality") or "").strip()
+        if locality.lower() in ["n.a.", "none", "null"]: locality = ""
+        
+        if not locality and city_name: 
+            locality = city_name
+
+        if pincode_value:
+            if pincode_value not in full_address:
+                if full_address:
+                    full_address = f"{full_address.strip(', ')}, {city_name} - {pincode_value}".strip(', ')
+                elif city_name:
+                    full_address = f"{city_name} - {pincode_value}"
+            
+            if locality and pincode_value not in locality:
+                locality = f"{locality} - {pincode_value}"
+
+        # --- 4. Evaluate Maharashtra Flag based on DMS State ---
+        is_maharashtra = bool(extracted_data.get("is_maharashtra", True))
         if state_name and "maharashtra" not in state_name.lower():
             is_maharashtra = False
         elif state_name and "maharashtra" in state_name.lower():
             is_maharashtra = True
 
-        # --- BUG FIX 4: Address Formatting ---
-        full_address = extracted_data.get("full_address", "")
-        if pincode_value and pincode_value not in full_address:
-            full_address = f"{full_address.strip(', ')}, {city_name} - {pincode_value}"
-
-        # --- PREPARE FINAL PAYLOAD ---
         response_data = {
             "company_name": company_name[:150],
-            "owner_name": extracted_data.get("owner_name", "N.A."),
-            "primary_phone": extracted_data.get("primary_phone", ""),
-            "alternate_phone": extracted_data.get("alternate_phone") or "N.A.",
-            "email_1": extracted_data.get("email_1", ""),
-            "email_2": extracted_data.get("email_2") or "N.A.",
+            "owner_name": str(extracted_data.get("owner_name") or "N.A.").strip(),
+            "primary_phone": str(extracted_data.get("primary_phone") or "N.A.").strip(),
+            "alternate_phone": str(extracted_data.get("alternate_phone") or "N.A.").strip(),
+            "email_1": str(extracted_data.get("email_1") or "").strip(),
+            "email_2": str(extracted_data.get("email_2") or "N.A.").strip(),
             "full_address": full_address,
-            "locality": extracted_data.get("locality") or city_name,
+            "locality": locality,
             "state_name": state_name,
             "city_name": city_name,
             "pincode_value": pincode_value,
@@ -240,10 +257,11 @@ def analyze_website(request):
         }
 
         # Category mapping
-        cat_data = match_category_from_csv(combined_text, company_name, extracted_data.get("ai_niche", ""))
+        cat_data = match_category_from_csv(combined_text, company_name, str(extracted_data.get("ai_niche") or ""))
         response_data.update(cat_data)
 
         return Response(response_data)
 
     except Exception as e:
+        print(f"[FATAL SERVER ERROR] {str(e)}")
         return Response({"error": str(e)}, status=500)
