@@ -85,7 +85,6 @@ def normalize_location_from_dms(pincode_raw, city_raw):
     Returns the exact spelling of State, City, and Pincode from your CSV.
     """
     pincode_clean = re.sub(r'\D', '', str(pincode_raw or ''))[:6]
-    
     city_clean = str(city_raw or '').strip().lower()
     if city_clean in ["n.a.", "none", "null"]: city_clean = ""
 
@@ -102,7 +101,7 @@ def normalize_location_from_dms(pincode_raw, city_raw):
         with open(csv_path, mode='r', encoding='utf-8-sig', errors='ignore') as f:
             reader = list(csv.DictReader(f)) 
             
-            # 1. Pincode Match (Most Accurate)
+            # 1. Pincode Match (Most Accurate - use to override everything)
             if len(pincode_clean) == 6:
                 for row in reader:
                     p_val = (row.get('Pincode') or row.get('Pin') or row.get('pincode') or '').strip()
@@ -113,7 +112,7 @@ def normalize_location_from_dms(pincode_raw, city_raw):
                             "pincode": p_val
                         }
             
-            # 2. City Match (Fallback)
+            # 2. City Match (Fallback if pincode was missing from website)
             if city_clean:
                 for row in reader:
                     c_val = (row.get('City') or row.get('District') or row.get('city_name') or '').strip()
@@ -174,8 +173,8 @@ def analyze_website(request):
         EXPECTED KEYS: { "company_name": "", "owner_name": "", "primary_phone": "", "alternate_phone": "", "email_1": "", "email_2": "", "full_address": "", "locality": "", "state_name": "", "city_name": "", "pincode_value": "", "ai_niche": "", "is_maharashtra": true }
         """
 
-        # Using gemini-2.5-flash for ultimate stability and speed without 404s
-        model = genai.GenerativeModel(model_name="gemini-2.5-flash", generation_config={"response_mime_type": "application/json"})
+        # Upgraded to the Pro model
+        model = genai.GenerativeModel(model_name="gemini-1.5-pro", generation_config={"response_mime_type": "application/json"})
         ai_response = model.generate_content(system_prompt + "\n\n--- TEXT ---\n" + combined_text[:25000])
         
         try:
@@ -183,11 +182,10 @@ def analyze_website(request):
             if res_text.startswith("```"):
                 res_text = re.sub(r'^```[a-z]*\n|```$', '', res_text, flags=re.MULTILINE)
             extracted_data = json.loads(res_text)
-        except Exception as json_err:
-            print(f"[JSON ERROR] Failed to parse AI output: {str(json_err)}")
+        except:
             return Response({"error": "AI generated invalid JSON"}, status=500)
 
-        # --- 1. Clean Company Name ---
+        # --- 1. Clean Company Name (Safe str cast to prevent crash) ---
         company_name = str(extracted_data.get("company_name") or "N.A.").strip()
         if " by " in company_name.lower():
             company_name = company_name[:company_name.lower().rfind(" by ")].strip()
@@ -197,21 +195,19 @@ def analyze_website(request):
         raw_city = str(extracted_data.get("city_name") or "").strip()
         raw_state = str(extracted_data.get("state_name") or "").strip()
         
-        # Prevent "None" literal string bug
-        if raw_city.lower() in ["n.a.", "none", "null"]: raw_city = ""
-        if raw_state.lower() in ["n.a.", "none", "null"]: raw_state = ""
-        if raw_pin.lower() in ["n.a.", "none", "null"]: raw_pin = ""
-        
         verified_loc = normalize_location_from_dms(raw_pin, raw_city)
         
         if verified_loc:
-            state_name = verified_loc["state"]
-            city_name = verified_loc["city"]
-            pincode_value = verified_loc["pincode"]
+            state_name = str(verified_loc.get("state") or "")
+            city_name = str(verified_loc.get("city") or "")
+            pincode_value = str(verified_loc.get("pincode") or "")
         else:
             state_name = raw_state
             city_name = raw_city
             pincode_value = re.sub(r'\D', '', raw_pin)[:6]
+
+        if city_name.lower() in ["n.a.", "none", "null"]: city_name = ""
+        if state_name.lower() in ["n.a.", "none", "null"]: state_name = ""
 
         # --- 3. Format Address & Locality with Pincode ---
         full_address = str(extracted_data.get("full_address") or "").strip()
@@ -224,12 +220,13 @@ def analyze_website(request):
             locality = city_name
 
         if pincode_value:
-            if pincode_value not in full_address:
-                if full_address:
-                    full_address = f"{full_address.strip(', ')}, {city_name} - {pincode_value}".strip(', ')
-                elif city_name:
-                    full_address = f"{city_name} - {pincode_value}"
+            # Append pincode to address if not already there
+            if full_address and pincode_value not in full_address:
+                full_address = f"{full_address.strip(', ')}, {city_name} - {pincode_value}".strip(', ')
+            elif not full_address and city_name:
+                full_address = f"{city_name} - {pincode_value}"
             
+            # Append pincode to locality if not already there
             if locality and pincode_value not in locality:
                 locality = f"{locality} - {pincode_value}"
 
